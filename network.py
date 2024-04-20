@@ -87,7 +87,7 @@ class CrossEntropyLoss2d(nn.Module):
         loss = self.nll_loss(F.log_softmax(inputs, dim=1), targets)
         return loss.mean(dim=2).mean(dim=1)
     
-class ResEMA(nn.Module):
+class ResNetEMA(nn.Module):
     '''
     RGB-D Image Segmentation using Expectation-Maximization Attention Network
     '''
