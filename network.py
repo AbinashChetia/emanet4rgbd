@@ -4,6 +4,58 @@ import torch.nn as nn
 from torch.nn import functional as F
 from torch.nn.modules.batchnorm import BatchNorm2d
 
+class ResNet(nn.Module):
+    '''Class used to create a ResNet-18 model'''
+
+    def __init__(self, num_classes, mode='rgb'):
+        super(ResNet, self).__init__()
+        self.num_classes = num_classes
+        self.mode = mode
+
+        self._create_model()
+        
+    def _create_model(self):       
+        # Initial conv & pool
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        
+        # Residual blocks (x4)
+        self.res2 = self._residual_block(64, 64, 1)
+        self.res3 = self._residual_block(64, 128, 2)
+        self.res4 = self._residual_block(128, 256, 2)
+        self.res5 = self._residual_block(256, 512, 2)
+        
+        # Final pool & classifier
+        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(512, self.num_classes)
+        
+    def _residual_block(self, in_channels, out_channels, stride):
+        layers = []
+        layers.append(nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False))
+        layers.append(nn.BatchNorm2d(out_channels))
+        layers.append(nn.ReLU(inplace=True))
+        layers.append(nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False))
+        layers.append(nn.BatchNorm2d(out_channels))
+        
+        return nn.Sequential(*layers)
+        
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        x = F.max_pool2d(x, kernel_size=3, stride=2, padding=1)
+        
+        x = self.res2(x) + x
+        x = self.res3(x) + x
+        x = self.res4(x) + x
+        x = self.res5(x) + x
+        
+        x = self.avg_pool(x)
+        x = torch.flatten(x, 1)
+        x = self.fc(x)
+        
+        return x
+
 class EMAU(nn.Module):
     '''
     Expectation-Maximization Attention Unit
