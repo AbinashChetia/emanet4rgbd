@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.nn import functional as Func
+from torch.nn import functional as F
 from torch.nn.modules.batchnorm import BatchNorm2d
 
 class EMAU(nn.Module):
