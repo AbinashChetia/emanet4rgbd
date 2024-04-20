@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from torch.nn.modules.batchnorm import _BatchNorm
+from torch.nn.modules.batchnorm import BatchNorm2d
 
 class EMAU(nn.Module):
     '''
@@ -17,13 +17,13 @@ class EMAU(nn.Module):
         self.conv1 = nn.Conv2d(c, c, 1)
         self.conv2 = nn.Sequential(
             nn.Conv2d(c, c, 1, bias=False),
-            _BatchNorm(c)
+            BatchNorm2d(c)
         )
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
                 m.weight.data.normal_(0, np.sqrt(2. / n))
-            elif isinstance(m, _BatchNorm):
+            elif isinstance(m, BatchNorm2d):
                 m.weight.data.fill_(1)
                 if m.bias is not None:
                     m.bias.data.zero_()
