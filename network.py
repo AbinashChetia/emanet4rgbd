@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.nn import functional as F
 from torch.nn.modules.batchnorm import BatchNorm2d
 
 class EMAU(nn.Module):
@@ -67,7 +66,7 @@ class ConvBNReLU(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, padding, dilation):
         super(ConvBNReLU, self).__init__()
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, bias=False)
-        self.bn = nn.BatchNorm2d(out_channels)
+        self.bn = BatchNorm2d(out_channels)
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
