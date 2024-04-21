@@ -7,16 +7,18 @@ from torch.nn.modules.batchnorm import BatchNorm2d
 class ResNet(nn.Module):
     '''Class used to create a ResNet-18 model'''
 
-    def __init__(self, num_classes, mode='rgb'):
+    def __init__(self, num_classes, mode):
         super(ResNet, self).__init__()
         self.num_classes = num_classes
         self.mode = mode
-
         self._create_model()
         
     def _create_model(self):       
         # Initial conv & pool
-        self.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=7, stride=2, padding=3, bias=False)
+        if self.mode == 'rgb':
+            self.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=7, stride=2, padding=3, bias=False)
+        elif self.mode == 'd':
+            self.conv1 = nn.Conv2d(in_channels=1, out_channels=64, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         
         # Residual blocks (x4)
@@ -61,6 +63,7 @@ class EMAU(nn.Module):
     Expectation-Maximization Attention Unit
     '''
     def __init__(self, c, k, n_stages):
+        super(EMAU, self).__init__()
         self.n_stages = n_stages
         mu  = torch.Tensor(1, c, k)
         mu.normal_(0, np.sqrt(2. / k)) # Kaiming's Initialization
@@ -133,6 +136,7 @@ class CrossEntropyLoss2d(nn.Module):
     Cross Entropy Loss for 2D Image Segmentation
     '''
     def __init__(self, weight=None, reduction='none', ignore_index=-1):
+        super(CrossEntropyLoss2d, self).__init__()
         self.nll_loss = nn.NLLLoss(weight, reduction=reduction, ignore_index=ignore_index)
 
     def forward(self, inputs, targets):
@@ -143,7 +147,10 @@ class ResNetEMA(nn.Module):
     '''
     RGB-D Image Segmentation using Expectation-Maximization Attention Network
     '''
-    def __init__(self, n_classes, n_layers, emau_stages):
+    def __init__(self, n_classes, emau_stages):
+        super(ResNetEMA, self).__init__()
+        self.resnet_rgb = ResNet(n_classes, mode='rgb')
+        self.resnet_d = ResNet(n_classes, mode='d')
         self.fc0 = ConvBNReLU(2048, 512, 3, 1, 1, 1)
         self.emau = EMAU(512, 64, emau_stages)
         self.fc1 = nn.Sequential(
@@ -154,7 +161,10 @@ class ResNetEMA(nn.Module):
         self.criterion = CrossEntropyLoss2d(ignore_index=255, reduction='none')
 
     def forward(self, img, lbl=None, size=None):
-        x = self.fc0(img)
+        x_rgb = self.resnet_rgb(img['rgb'])
+        x_d = self.resnet_d(img['d'])
+        x = torch.cat([x_rgb, x_d], dim=1)
+        x = self.fc0(x)
         x, mu = self.emau(x)
         x = self.fc1(x)
         x = self.fc2(x)
