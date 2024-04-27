@@ -13,10 +13,7 @@ TRAIN_TEST_RATIO = 0.8
 BATCH_SIZE = 32
 
 def collate_fn(batch):
-    rgb = torch.cat([torch.Tensor(item[0]) for item in batch], dim=0)
-    d = torch.cat([torch.Tensor(item[1]) for item in batch], dim=0)
-    labels = torch.cat([torch.Tensor(item[2]) for item in batch], dim=0)
-    return {'rgb': rgb, 'd': d}, labels
+    pass
 
 def train():
     dataset = pk.load(open(DATASET_LOC, 'rb'))
