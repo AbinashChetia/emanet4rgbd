@@ -4,62 +4,70 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-import network
+from network import RCFusionEMA
+from dataset import NYUDataset
+
+import warnings
+warnings.filterwarnings('ignore')
 
 DATASET_LOC = 'nyu_depth_v2_labeled_data.pkl'
 DEVICE = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
+# DEVICE = torch.device('cpu')
 
+MAX_DATA = 1000
 TRAIN_TEST_RATIO = 0.8
-BATCH_SIZE = 32
+BATCH_SIZE = 2
+MAX_ITERS = 10
+ITER_STEP = 1
 
-def collate_fn(batch):
-    pass
+nyu_depth_labeled_data = pk.load(open(DATASET_LOC, 'rb'))
+nyu_dataset = {
+    'rgb': nyu_depth_labeled_data['images'],
+    'depth': nyu_depth_labeled_data['depths'],
+    'label': nyu_depth_labeled_data['labels']
+}
 
-def train():
-    dataset = pk.load(open(DATASET_LOC, 'rb'))
-    dataset_img = {'rgb': np.array(dataset['images'], dtype=np.float32), 'd': np.array(dataset['depths'], dtype=np.float32)}
-    dataset_labels = np.array(dataset['labels'], dtype=int)
-    
-    train_test_ratio = TRAIN_TEST_RATIO
-    last_train_idx = int(len(dataset_img['rgb']) * train_test_ratio)
-    
-    train_data = {'rgb': dataset_img['rgb'][:last_train_idx], 'd': dataset_img['d'][:last_train_idx]}
-    train_labels = dataset_labels[:last_train_idx]
+nyu_dataset = {
+    'rgb': nyu_dataset['rgb'][:MAX_DATA],
+    'depth': nyu_dataset['depth'][:MAX_DATA],
+    'label': nyu_dataset['label'][:MAX_DATA]
+}
 
-    val_data = {'rgb': dataset_img['rgb'][last_train_idx:], 'd': dataset_img['d'][last_train_idx:]}
-    val_labels = dataset_labels[last_train_idx:]
-    
-    model = network.ResNetEMA(n_classes=100, emau_stages=3)
-    model.to(DEVICE)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+nyu_train_dataset = {
+    'rgb': nyu_dataset['rgb'][:int(len(nyu_dataset['rgb']) * TRAIN_TEST_RATIO)],
+    'depth': nyu_dataset['depth'][:int(len(nyu_dataset['depth']) * TRAIN_TEST_RATIO)],
+    'label': nyu_dataset['label'][:int(len(nyu_dataset['label']) * TRAIN_TEST_RATIO)]
+}
 
-    train_loader = DataLoader(list(zip(train_data['rgb'], train_data['d'], train_labels)), batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
-    val_loader = DataLoader(list(zip(val_data['rgb'], val_data['d'], val_labels)), batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
+nyu_val_dataset = {
+    'rgb': nyu_dataset['rgb'][int(len(nyu_dataset['rgb']) * TRAIN_TEST_RATIO):],
+    'depth': nyu_dataset['depth'][int(len(nyu_dataset['depth']) * TRAIN_TEST_RATIO):],
+    'label': nyu_dataset['label'][int(len(nyu_dataset['label']) * TRAIN_TEST_RATIO):]
+}
 
-    for epoch in range(10):
-        model.train()
-        for idx, (data, labels) in enumerate(train_loader):
-            data['rgb'] = data['rgb'].to(DEVICE)
-            data['d'] = data['d'].to(DEVICE)
-            labels = labels.to(DEVICE)
-            optimizer.zero_grad()
-            loss, _ = model(data, labels)
-            loss.backward()
-            optimizer.step()
-            print(f'Epoch {epoch}, Batch {idx}, Loss: {loss.item()}')
+train_data = NYUDataset(nyu_train_dataset, device=DEVICE)
+val_data = NYUDataset(nyu_val_dataset, device=DEVICE)
 
-        model.eval()
-        with torch.no_grad():
-            total_loss = 0
-            for idx, (data, labels) in enumerate(val_loader):
-                data = data.to(DEVICE)
-                labels = labels.to(DEVICE)
-                loss, _ = model(data, labels)
-                total_loss += loss.item()
-            print(f'Epoch {epoch}, Validation Loss: {total_loss / len(val_loader)}')
-    opt = input('Save model? (y/n)')
-    if opt == 'y':
-        torch.save(model.state_dict(), 'model.pth')
+train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
+val_loader = DataLoader(val_data, batch_size=BATCH_SIZE, shuffle=True)
 
-if __name__ == '__main__':
-    train()    
+model = RCFusionEMA(n_classes=64).to(DEVICE)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+for iter in range(MAX_ITERS):
+    for rgb, depth, label in train_loader:
+        loss = model.train(rgb, depth, label, optimizer)
+        print(f'Iter: {iter} | Training Loss: {loss}')
+        if iter % ITER_STEP == 0:
+            val_loss = 0
+            for rgb, depth, label in val_loader:
+                val_loss += model.validate(rgb, depth, label)
+            print(f'\tValidation loss: {val_loss/len(val_loader)}')
+        iter += 1
+    break
+
+save_model = input('Do you want to save the model? (y/n): ')
+if save_model == 'y':
+    torch.save(model.state_dict(), 'rcfusion_ema.pth')
+    print('Model saved as rcfusion_ema.pth!')
+else:
+    print('Model not saved!')

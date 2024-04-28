@@ -4,59 +4,103 @@ import torch.nn as nn
 from torch.nn import functional as F
 from torch.nn.modules.batchnorm import BatchNorm2d
 
-class ResNet(nn.Module):
-    '''Class used to create a ResNet-18 model'''
+EM_MOMENTUM = 0.9
 
-    def __init__(self, num_classes, mode):
-        super(ResNet, self).__init__()
-        self.num_classes = num_classes
-        self.mode = mode
-        self._create_model()
-        
-    def _create_model(self):       
-        # Initial conv & pool
-        if self.mode == 'rgb':
-            self.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=7, stride=2, padding=3, bias=False)
-        elif self.mode == 'd':
-            self.conv1 = nn.Conv2d(in_channels=1, out_channels=64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.bn1 = nn.BatchNorm2d(64)
-        
-        # Residual blocks (x4)
-        self.res2 = self._residual_block(64, 64, 1)
-        self.res3 = self._residual_block(64, 128, 2)
-        self.res4 = self._residual_block(128, 256, 2)
-        self.res5 = self._residual_block(256, 512, 2)
-        
-        # Final pool & classifier
-        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(512, self.num_classes)
-        
-    def _residual_block(self, in_channels, out_channels, stride):
-        layers = []
-        layers.append(nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False))
-        layers.append(nn.BatchNorm2d(out_channels))
-        layers.append(nn.ReLU(inplace=True))
-        layers.append(nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False))
-        layers.append(nn.BatchNorm2d(out_channels))
-        
-        return nn.Sequential(*layers)
-        
+import torch
+import torch.nn as nn
+import torchvision.models as models
+
+class ProjectionBlock(nn.Module):
+    '''Projection block for RGB and Depth CNNs'''
+    def __init__(self, in_channels, out_channels):
+        super(ProjectionBlock, self).__init__()
+
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=7, stride=1, padding=0)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=1, stride=1, padding=0)
+        self.global_max_pooling = nn.AdaptiveMaxPool2d((1, 1))
+
     def forward(self, x):
         x = self.conv1(x)
-        x = self.bn1(x)
-        x = F.relu(x)
-        x = F.max_pool2d(x, kernel_size=3, stride=2, padding=1)
-        
-        x = self.res2(x) + x
-        x = self.res3(x) + x
-        x = self.res4(x) + x
-        x = self.res5(x) + x
-        
-        x = self.avg_pool(x)
-        x = torch.flatten(x, 1)
-        x = self.fc(x)
-        
+        x = self.conv2(x)
+        x = self.global_max_pooling(x)
         return x
+
+class RGB_CNN(nn.Module):
+    '''Class for RGB's CNN'''
+    def __init__(self, num_features):
+        super(RGB_CNN, self).__init__()
+
+        resnet18 = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)   
+        resnet18.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)    
+        self.resnet = nn.Sequential(*list(resnet18.children())[:-2])     
+
+        self.projection_block_rgb = ProjectionBlock(512, 64)  
+        skip_connections = [2, 2, 2, 2]    
+        layers = [2, 2, 2, 2]  
+        self.L = sum(skip_connections) * sum(layers) 
+
+        self.features = nn.ModuleList()
+        for i in range(len(layers)):
+            for j in range(layers[i]):
+                self.features.append(nn.Conv2d(64, num_features, kernel_size=1))
+
+    def forward(self, rgb):
+        x_rgb = self.resnet(rgb)
+        x_rgb = self.projection_block_rgb(x_rgb)
+
+        features = []
+        for feature_layer in self.features:
+            x_rgb = feature_layer(x_rgb)
+            features.append(x_rgb)
+        return features
+
+class Depth_CNN(nn.Module):
+    '''Class for Depth's CNN'''
+    def __init__(self, num_features):
+        super(Depth_CNN, self).__init__()
+        resnet18 = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+        resnet18.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.resnet = nn.Sequential(*list(resnet18.children())[:-2])
+        self.projection_block_depth = ProjectionBlock(512, 64) 
+        skip_connections = [2, 2, 2, 2]
+        layers = [2, 2, 2, 2]
+        self.L = sum(skip_connections) * sum(layers)
+
+        self.features = nn.ModuleList()
+        for i in range(len(layers)):
+            for j in range(layers[i]):
+                self.features.append(nn.Conv2d(64, num_features, kernel_size=1))
+
+    def forward(self, depth):
+        depth = depth.unsqueeze(1)
+        x_depth = self.resnet(depth)
+        x_depth = self.projection_block_depth(x_depth)
+
+        features = []
+        for feature_layer in self.features:
+            x_depth = feature_layer(x_depth)
+            features.append(x_depth)
+        return features
+
+class RCFusion(nn.Module):
+    '''Class for RCFusion architecture'''
+
+    def __init__(self, num_feats):
+        super(RCFusion, self).__init__()
+
+        self.rgb_cnn = RGB_CNN(num_feats)
+        self.depth_cnn = Depth_CNN(num_feats)
+
+    def forward(self, rgb, depth):
+        rgb_features = self.rgb_cnn(rgb)
+        depth_features = self.depth_cnn(depth)
+
+        rgb_features_last_layer = rgb_features[-1:]
+        depth_features_last_layer = depth_features[-1:]
+
+        # Concatenate the last layer features
+        concatenated_feature = torch.cat((rgb_features_last_layer[0], depth_features_last_layer[0]), dim=1)
+        return concatenated_feature
 
 class EMAU(nn.Module):
     '''
@@ -143,36 +187,58 @@ class CrossEntropyLoss2d(nn.Module):
         loss = self.nll_loss(F.log_softmax(inputs, dim=1), targets)
         return loss.mean(dim=2).mean(dim=1)
     
-class ResNetEMA(nn.Module):
+class RCFusionEMA(nn.Module):
     '''
     RGB-D Image Segmentation using Expectation-Maximization Attention Network
     '''
-    def __init__(self, n_classes, emau_stages):
-        super(ResNetEMA, self).__init__()
-        self.resnet_rgb = ResNet(n_classes, mode='rgb')
-        self.resnet_d = ResNet(n_classes, mode='d')
-        self.fc0 = ConvBNReLU(2048, 512, 3, 1, 1, 1)
-        self.emau = EMAU(512, 64, emau_stages)
+    def __init__(self, n_classes, rcf_feats=64, emau_stages=3):
+        super(RCFusionEMA, self).__init__()
+        self.rcfusion = RCFusion(num_feats=rcf_feats)
+        self.fc0 = ConvBNReLU(128, 64, 3, 1, 1, 1)
+        self.emau = EMAU(64, 512, emau_stages)
         self.fc1 = nn.Sequential(
             ConvBNReLU(512, 256, 3, 1, 1, 1),
             nn.Dropout2d(p=0.1))
         self.fc2 = nn.Conv2d(256, n_classes, 1)
+        self.fc1 = nn.Conv2d(64, 64, 3, 1, 1)
+        self.fc2 = nn.Conv2d(64, n_classes, 1)
 
         self.criterion = CrossEntropyLoss2d(ignore_index=255, reduction='none')
 
-    def forward(self, img, lbl=None, size=None):
-        x_rgb = self.resnet_rgb(img['rgb'])
-        x_d = self.resnet_d(img['d'])
-        x = torch.cat([x_rgb, x_d], dim=1)
+    def forward(self, rgb, depth, lbl=None, size=None):
+        x = self.rcfusion(rgb, depth)
         x = self.fc0(x)
         x, mu = self.emau(x)
         x = self.fc1(x)
         x = self.fc2(x)
         if size is None:
-            size = img.size()[-2:]
+            size = rgb.size()[-2:]
         pred = F.interpolate(x, size=size, mode='bilinear', align_corners=True)
         if lbl is not None:
             loss = self.criterion(pred, lbl)
             return loss, mu
         else:
             return pred
+        
+    def train(self, rgb, depth, label, optimizer):
+        loss, mu = self.forward(rgb, depth, label, size=rgb.size()[-2:])
+
+        with torch.no_grad():
+            mu = mu.mean(dim=0, keepdim=True)
+            momentum = EM_MOMENTUM
+            self.emau.mu *= momentum
+            self.emau.mu += mu * (1 - momentum)
+
+        loss = loss.mean()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        return loss.item()
+    
+    def validate(self, rgb, depth, label):
+        loss, _ = self.forward(rgb, depth, label, size=rgb.size()[-2:])
+        return loss
+    
+    def predict(self, image):
+        return self.forward(image, size=image.size()[-2:])
